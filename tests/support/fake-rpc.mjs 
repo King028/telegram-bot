@@ -1,0 +1,206 @@
+/**
+ * A real HTTP JSON-RPC server standing in for Soroban RPC's `getHealth` and
+ * `getEvents`, so `poller.ts` -> `events.ts` -> `decode.ts` run completely
+ * unmodified against it, exactly as they would against Testnet — the only
+ * thing swapped is the URL.
+ *
+ * Pagination deliberately mirrors the trap `events.ts` documents: each
+ * request only scans a bounded slice of ledgers (`windowLedgers`) and
+ * returns a cursor at the end of that slice even when it found nothing
+ * there. A test that stops walking on the first empty page would miss
+ * events sitting further out — same bug the real reader guards against.
+ */
+import http from "node:http";
+
+const DEFAULT_WINDOW_LEDGERS = 5;
+
+export function createFakeRpc({
+  oldestLedger = 1,
+  latestLedger = 100,
+  windowLedgers = DEFAULT_WINDOW_LEDGERS,
+} = {}) {
+  const state = {
+    oldestLedger,
+    latestLedger,
+    windowLedgers,
+    events: [],
+    nextOpIndex: 0,
+    queuedFailures: { getHealth: [], getEvents: [] },
+    calls: { getHealth: 0, getEvents: 0 },
+  };
+
+  function cursorFor(ev) {
+    const toid = (BigInt(ev.ledger) << 32n) | BigInt(ev.opIndex);
+    return `${toid.toString()}-0`;
+  }
+
+  /** Register one fixture event (see tests/support/scval.mjs) at a ledger. */
+  function addEvent({ contractId, ledger, txHash, topicB64, valueB64 }) {
+    const ev = {
+      contractId,
+      ledger,
+      txHash: txHash ?? `fake-tx-${state.nextOpIndex}`,
+      opIndex: state.nextOpIndex,
+      topicB64,
+      valueB64,
+    };
+    state.nextOpIndex += 1;
+    state.events.push(ev);
+    if (ledger > state.latestLedger) state.latestLedger = ledger;
+    return ev;
+  }
+
+  /**
+   * Make the next `count` calls to `method` ("getHealth" | "getEvents") fail.
+   * `behavior` is one of:
+   *   { error: { code, message } }  — JSON-RPC error response
+   *   { reset: true }               — server aborts the TCP connection
+   *   { hang: true }                — server never responds (caller needs its own timeout)
+   */
+  function queueFailure(method, behavior, count = 1) {
+    for (let i = 0; i < count; i += 1) state.queuedFailures[method].push(behavior);
+  }
+
+  function setLatestLedger(ledger) {
+    state.latestLedger = ledger;
+  }
+
+  function handleGetHealth() {
+    state.calls.getHealth += 1;
+    const failure = state.queuedFailures.getHealth.shift();
+    if (failure) return failure;
+    return {
+      result: {
+        status: "healthy",
+        latestLedger: state.latestLedger,
+        oldestLedger: state.oldestLedger,
+        ledgerRetentionWindow: 120_960,
+      },
+    };
+  }
+
+  function handleGetEvents(params) {
+    state.calls.getEvents += 1;
+    const failure = state.queuedFailures.getEvents.shift();
+    if (failure) return failure;
+
+    const filters = params.filters ?? [];
+    const contractIds = new Set(filters.flatMap((f) => f.contractIds ?? []));
+    const limit = params.limit ?? 100;
+
+    let fromLedger;
+    if (params.cursor) {
+      if (params.startLedger !== undefined) {
+        return { error: { code: -32602, message: "cursor and startLedger are mutually exclusive" } };
+      }
+      const toid = BigInt(String(params.cursor).split("-")[0]);
+      fromLedger = Number(toid >> 32n) + 1;
+    } else {
+      const startLedger = params.startLedger ?? state.oldestLedger;
+      if (startLedger < state.oldestLedger) {
+        return {
+          error: {
+            code: -32600,
+            message: `start ledger ${startLedger} is before the oldest retained ledger ${state.oldestLedger}`,
+          },
+        };
+      }
+      fromLedger = startLedger;
+    }
+
+    if (fromLedger > state.latestLedger) {
+      return {
+        result: {
+          events: [],
+          latestLedger: state.latestLedger,
+          oldestLedger: state.oldestLedger,
+          cursor: undefined,
+        },
+      };
+    }
+
+    // Only a bounded slice per request — this is the part that makes an
+    // empty page NOT mean "done": there can be real events past `toLedger`.
+    const toLedger = Math.min(fromLedger + state.windowLedgers - 1, state.latestLedger);
+
+    const candidates = state.events
+      .filter((e) => contractIds.size === 0 || contractIds.has(e.contractId))
+      .filter((e) => e.ledger >= fromLedger && e.ledger <= toLedger)
+      .sort((a, b) => a.ledger - b.ledger || a.opIndex - b.opIndex);
+
+    const page = candidates.slice(0, limit);
+    const cursor =
+      page.length === limit && candidates.length > limit
+        ? cursorFor(page[page.length - 1])
+        : `${(BigInt(toLedger) << 32n).toString()}-0`;
+
+    return {
+      result: {
+        events: page.map((e) => ({
+          type: "contract",
+          ledger: String(e.ledger),
+          ledgerClosedAt: new Date(e.ledger * 5000).toISOString(),
+          contractId: e.contractId,
+          id: `${e.ledger}-${e.opIndex}`,
+          pagingToken: cursorFor(e),
+          topic: e.topicB64,
+          value: e.valueB64,
+          inSuccessfulContractCall: true,
+          txHash: e.txHash,
+        })),
+        latestLedger: state.latestLedger,
+        oldestLedger: state.oldestLedger,
+        cursor,
+      },
+    };
+  }
+
+  const server = http.createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(404).end();
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        res.writeHead(400).end();
+        return;
+      }
+      const { method, params, id } = payload;
+      let outcome;
+      if (method === "getHealth") outcome = handleGetHealth();
+      else if (method === "getEvents") outcome = handleGetEvents(params ?? {});
+      else outcome = { error: { code: -32601, message: `method not found: ${method}` } };
+
+      if (outcome.hang) return; // never respond
+      if (outcome.reset) {
+        req.socket.destroy();
+        return;
+      }
+      const body_ = JSON.stringify({ jsonrpc: "2.0", id, ...outcome });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(body_);
+    });
+  });
+
+  return {
+    state,
+    addEvent,
+    queueFailure,
+    setLatestLedger,
+    async listen() {
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address();
+      return `http://127.0.0.1:${port}/`;
+    },
+    close() {
+      return new Promise((resolve) => server.close(() => resolve()));
+    },
+  };
+}
