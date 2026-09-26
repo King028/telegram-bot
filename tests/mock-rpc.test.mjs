@@ -37,13 +37,13 @@ const execFileAsync = promisify(execFile);
 const TOKEN = "123456789:TEST-ONLY-TOKEN-NEVER-USE";
 const ALICE = "GCLJONJVCLJGE6CSMCHCGYA563ADTCK5YGF3KERDMSNS3MNNDAIXHFA5";
 const BOB = "GC22MRUQSG6TWXMKANC7MDKBDOVZXB27774NYOINQKOCFUWIUBRTVNTV";
+
 const TIP = 1000;
 const TIP_CURSOR = `${(BigInt(TIP) << 32n) | 0xffffffffn}-4294967295`;
 const PRE_EVENT_CURSOR = `${(949n << 32n) | 0xffffffffn}-4294967295`;
 const STALE_CURSOR = `${100n << 32n}-0`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const SECRET_RE = /\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/;
 
 // ── Harness ─────────────────────────────────────────────────────────────────
@@ -362,7 +362,6 @@ test("limit=5 paginates a dense ledger down to every event", async () => {
       { source: "market", contractId: MOCK_MARKET_CONTRACT_ID },
       { startLedger: 900, limit: 5 },
     );
-
     assert.equal(scan.events.length, 12, "a tight limit must paginate, not drop");
     assert.equal(scan.truncated, false);
     assert.ok(scan.pages > 1);
@@ -388,7 +387,6 @@ test("a stale cursor fails the scan while the cursor is preserved", async () => 
     });
 
     await waitFor(() => poller.status().consecutiveFailures >= 1, "stale cursor failure");
-
     const status = poller.status();
     assert.equal(status.running, true);
     assert.equal(status.notificationsSent, 0);
@@ -433,7 +431,6 @@ test("injected JSON-RPC failures stay bounded, redacted, and recover", async () 
     });
 
     await waitFor(() => poller.status().consecutiveFailures >= 1, "injected failure");
-
     let status = poller.status();
     assert.equal(status.running, true, "the loop must survive an RPC failure");
     assert.equal(status.notificationsSent, 0, "no events may be delivered by a failed scan");
@@ -475,6 +472,7 @@ test("injected JSON-RPC failures stay bounded, redacted, and recover", async () 
     assert.equal(status.notificationsFailed, 0);
     assert.notEqual(targetState(poller, "market").cursor, PRE_EVENT_CURSOR);
     assert.equal(sends.length, 2);
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -536,6 +534,7 @@ test("HTTP-shaped 429/500 failures are survivable and actionable", async () => {
     await waitFor(() => poller.status().notificationsSent === 1, "event delivered after recovery");
     assert.equal(poller.status().notificationsSent, 1, "delivered once after recovery");
     assert.equal(sends.length, 1);
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -580,6 +579,7 @@ test("a malformed event is skipped with a bounded reason while the cursor advanc
       skipLine.text,
       /\[poller\] skipped market event "claim_challenged" at ledger 996 \(.*expected a Stellar address strkey.*\)/,
     );
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -620,6 +620,7 @@ test("the per-cycle burst cap drops extras without losing cursor position", asyn
       ),
       `no cap warning in: ${cap.text()}`,
     );
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -660,6 +661,7 @@ test("Telegram send failures: bounded retries, drop, cursor advances, token reda
     assert.match(text, /send attempt 2 failed, retrying in 2000ms: /);
     assert.match(text, /send failed for claim_challenged at ledger 995 after retries: /);
     assert.ok(text.includes("[REDACTED]"), "token must be redacted in the failure line");
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -729,6 +731,7 @@ test("restart resumes from the version-1 cursor file with no replay and no drop"
     assert.notEqual(final.targets.market.cursor, cursor1, "cursor advanced for the new event");
     assert.ok(typeof final.targets.squad.cursor === "string");
     assert.equal(first.length, 1, "first run sent exactly one message overall");
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller1?.stop();
@@ -761,6 +764,7 @@ test("a corrupt cursor file cold-starts instead of crashing", async () => {
       cap.lines.some((l) => l.text.includes("cursor file unreadable, starting cold")),
       `no corrupt-file warning in: ${cap.text()}`,
     );
+
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -881,6 +885,7 @@ test("mock:poll boots a credential-free dry run and shuts down cleanly", async (
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+
   let out = "";
   child.stdout.on("data", (chunk) => {
     out += chunk;
@@ -911,6 +916,7 @@ test("mock:poll boots a credential-free dry run and shuts down cleanly", async (
     const [code] = await once(child, "exit");
     assert.equal(code, 0, `expected clean exit, output:\n${out}`);
     assert.ok(out.includes("[dry-run] SIGTERM received"), `no graceful stop in:\n${out}`);
+
     assertBoundedLogs(
       out.split("\n").filter(Boolean).map((text) => ({ text })),
     );
