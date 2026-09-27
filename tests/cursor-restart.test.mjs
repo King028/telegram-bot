@@ -168,6 +168,7 @@ test("a stale cursor below the retained floor is rewound while the other target 
     const market = status.targets.find((t) => t.source === "market");
     assert.equal(market.cursor, null, "the unreachable cursor is dropped, not guessed at");
     assert.equal(market.rewindFromLedger, 4000, "the scan resumes from the retained floor");
+    assert.equal(market.cursorStale, true, "health remains alerted until this target scans successfully");
     assert.equal(status.cursorRewinds, 1, "one bounded rewind is recorded");
     assert.equal(cursorOf(poller, "squad"), "9000-2", "healthy target still advances");
     assert.ok(status.lastError.message.length <= 250);

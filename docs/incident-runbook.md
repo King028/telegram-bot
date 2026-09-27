@@ -145,6 +145,8 @@ The Stellar chain remains the authoritative record.
 * The process reports a cursor-loading problem.
 * `/status` reports `Cursors rewound to the retained floor: N`, or `status.json`
   / `GET /health` show a non-null `rewindFromLedger`, after a long outage.
+* `GET /health` returns `503` and a target has `cursorStale: true`, even if the
+  other watched contract is scanning successfully.
 
 ### Recovery
 

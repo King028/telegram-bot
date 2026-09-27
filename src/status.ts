@@ -76,6 +76,8 @@ export interface StatusTargetSnapshot {
    * A bounded ledger number, never a cursor, token, or remote payload.
    */
   rewindFromLedger: number | null;
+  /** RPC rejected this target's cursor as stale; true until a scan succeeds. */
+  cursorStale: boolean;
   lastError: string | null;
 }
 
@@ -145,6 +147,7 @@ export function buildStatusSnapshot(
       lastEventLedger: target.lastEventLedger,
       rewindFromLedger:
         typeof target.rewindFromLedger === "number" ? target.rewindFromLedger : null,
+      cursorStale: target.cursorStale === true,
       lastError: target.lastError === null ? null : boundText(target.lastError),
     })),
   };

@@ -86,6 +86,8 @@ export interface TargetState {
    * restart mid-rewind keeps reading from the floor rather than cold-starting.
    */
   rewindFromLedger: number | null;
+  /** RPC has rejected this target's cursor as stale; clears after a successful scan. */
+  cursorStale: boolean;
   lastError: string | null;
 }
 
@@ -879,6 +881,7 @@ export function createPoller(deps: PollerDeps) {
         cursor: null,
         lastEventLedger: null,
         rewindFromLedger: null,
+        cursorStale: false,
         lastError: null,
       },
     ]),
@@ -990,6 +993,7 @@ export function createPoller(deps: PollerDeps) {
         // A rewind that was still pending when the process stopped resumes from
         // the same floor instead of falling back to a lookback cold start.
         target.rewindFromLedger = saved.rewindFromLedger ?? null;
+        target.cursorStale = target.rewindFromLedger !== null;
         // Restore the redelivery window too. Without this a restart would
         // re-notify the last event the inclusive cursor hands back.
         dedup.set(key, EventDedupWindow.fromJSON(saved.recentEventIds, config.dedupWindow));
@@ -1405,6 +1409,7 @@ export function createPoller(deps: PollerDeps) {
           status.latestLedger = scan.latestLedger;
           status.oldestLedger = scan.oldestLedger;
           current.lastError = null;
+          current.cursorStale = false;
           anyOk = true;
 
           if (previousFailed) {
@@ -1516,11 +1521,15 @@ export function createPoller(deps: PollerDeps) {
         } catch (err) {
           cycleFailures++;
           const message = errorMessage(err);
+          const staleCursor = isStaleCursorError(message);
           current.lastError = message;
+          if (staleCursor) current.cursorStale = true;
           status.lastError = { at: now(), message: `${target.source}: ${message}` };
           audit.recordError(err, "cycle_failed", { source: target.source });
-          console.error(`[poller] ${target.source} scan failed: ${message}`);
-          if (isStaleCursorError(message)) {
+          console.error(
+            `[poller] ${target.source} scan failed${staleCursor ? " (stale cursor)" : ""}: ${message}`,
+          );
+          if (staleCursor) {
             audit.record(
               auditEntry("stale_cursor", {
                 source: target.source,

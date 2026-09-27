@@ -184,6 +184,13 @@ export function healthMessage(
       `  last event ledger: ${target.lastEventLedger ?? "none seen"}`,
       `  cursor: \`${target.cursorPreview ?? "none (cold start)"}\``,
     );
+    if (target.cursorStale) {
+      lines.push(
+        target.rewindFromLedger === null
+          ? "  ALERT: RPC rejected this cursor as stale; its position is unchanged"
+          : `  ALERT: stale cursor recovery from ledger ${target.rewindFromLedger}`,
+      );
+    }
     if (target.hasError) {
       const targetState = status.targets.find((t) => t.source === target.source);
       if (targetState?.lastError) {

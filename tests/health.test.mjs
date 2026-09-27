@@ -82,12 +82,28 @@ test("buildHealthReport is stopped when the poller is not running", () => {
 test("buildHealthReport treats an operator pause as healthy", () => {
   const report = buildHealthReport(
     baseConfig({ healthStaleMs: 1 }),
-    baseStatus({ paused: true, lastSuccessAt: 1_000, consecutiveFailures: 10 }),
+    baseStatus({
+      paused: true,
+      lastSuccessAt: 1_000,
+      consecutiveFailures: 10,
+      targets: baseStatus().targets.map((target) => ({ ...target, cursorStale: true })),
+    }),
     5_000,
   );
   assert.equal(report.ok, true);
   assert.equal(report.status, "ok");
   assert.equal(report.poller.paused, true);
+});
+
+test("buildHealthReport alerts when one target has an unresolved stale cursor", () => {
+  const target = { ...baseStatus().targets[0], cursorStale: true, rewindFromLedger: 40 };
+  const status = baseStatus({ targets: [target] });
+  const report = buildHealthReport(baseConfig(), status, 5_500);
+
+  assert.equal(report.ok, false);
+  assert.equal(report.status, "degraded");
+  assert.equal(report.poller.targets[0].cursorStale, true);
+  assert.match(healthMessage(baseConfig(), status, 5_500), /ALERT: stale cursor recovery from ledger 40/);
 });
 
 test("buildHealthReport is degraded after repeated failures", () => {

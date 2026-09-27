@@ -88,6 +88,8 @@ export interface HealthReport {
       cursorPreview: string | null;
       /** Ledger a target is resuming from after a floor rewind, or null. */
       rewindFromLedger: number | null;
+      /** RPC rejected this target's cursor as stale; true until a scan succeeds. */
+      cursorStale: boolean;
       hasError: boolean;
     }>;
   };
@@ -181,12 +183,13 @@ export function buildHealthReport(
   } else {
     const failureBudget = Math.max(3, Math.ceil(60_000 / Math.max(config.pollIntervalMs, 1)));
     const tooManyFailures = poller.consecutiveFailures >= failureBudget;
+    const hasStaleCursor = poller.targets.some((target) => target.cursorStale === true);
     const hasEverSucceeded = poller.lastSuccessAt !== null;
     const stale =
       hasEverSucceeded &&
       config.healthStaleMs > 0 &&
       nowMs - (poller.lastSuccessAt as number) > config.healthStaleMs;
-    status = tooManyFailures || stale ? "degraded" : "ok";
+    status = tooManyFailures || stale || hasStaleCursor ? "degraded" : "ok";
   }
 
   return {
@@ -226,6 +229,7 @@ export function buildHealthReport(
         lastEventLedger: t.lastEventLedger,
         cursorPreview: previewCursor(t.cursor),
         rewindFromLedger: typeof t.rewindFromLedger === "number" ? t.rewindFromLedger : null,
+        cursorStale: t.cursorStale === true,
         hasError: t.lastError !== null,
       })),
     },

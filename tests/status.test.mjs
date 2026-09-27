@@ -67,9 +67,18 @@ test("snapshot is machine-readable and carries the documented schema version", (
   assert.equal(snapshot.latestLedger, 4226733);
   assert.equal(snapshot.targets.length, 1);
   assert.equal(snapshot.targets[0].cursor, "0018276211125911551-4294967295");
+  assert.equal(snapshot.targets[0].cursorStale, false);
 
   // Round-trips through JSON, which is the whole point of the file.
   assert.deepEqual(JSON.parse(serializeStatus(snapshot)), snapshot);
+});
+
+test("snapshot exposes a stale cursor as a per-target boolean", () => {
+  const target = { ...status().targets[0], cursorStale: true };
+  const snapshot = buildStatusSnapshot(config, status({ targets: [target] }), 1_060_000);
+
+  assert.equal(snapshot.targets[0].cursorStale, true);
+  assert.equal(typeof snapshot.targets[0].cursorStale, "boolean");
 });
 
 test("snapshot never contains the bot token or a raw chat id", () => {
