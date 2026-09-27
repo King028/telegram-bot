@@ -48,6 +48,27 @@ async function waitFor(cond, timeoutMs = 8_000) {
   }
 }
 
+/**
+ * Polls the cursor file on disk until `predicate` matches its parsed
+ * content. The cursor save happens as its own step at the end of a cycle,
+ * after any sends have already resolved — reading the file immediately
+ * after a send-based condition is satisfied is a race; this waits for the
+ * write itself, not a proxy for it.
+ */
+async function waitForCursorFile(file, predicate, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf8"));
+      if (predicate(parsed)) return parsed;
+    } catch {
+      // Not written yet (or mid-write) — keep polling.
+    }
+    if (Date.now() > deadline) throw new Error("waitForCursorFile timed out");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 function baseConfig(cursorFile, rpcUrl, overrides = {}) {
   return {
     marketContractId: MOCK_MARKET_CONTRACT_ID,
@@ -100,7 +121,7 @@ test("poller (mock rpc): decodes and notifies real events over real HTTP", async
     assert.match(sent[0], /New claim/);
     assert.equal(poller.status().notificationsFailed, 0);
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
@@ -115,10 +136,12 @@ test("poller (mock rpc): a malformed event is skipped without crashing the polle
   const poller = createPoller({ config, server: serverFor(mock.url), send: fakeSender(sent) });
   try {
     await poller.start();
-    await waitFor(() => sent.length >= 1);
-    assert.ok(poller.status().eventsSkipped >= 1);
+    // Both must hold together: the malformed event can sit later in the same
+    // cycle than the notifiable one, so checking eventsSkipped right after
+    // sent.length alone is a race against the cycle still finishing.
+    await waitFor(() => sent.length >= 1 && poller.status().eventsSkipped >= 1);
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
@@ -150,7 +173,7 @@ test("poller (mock rpc): an event past several empty pagination windows is still
     assert.match(sent[0], /\\#3\b/);
     assert.ok(mock.stats().byMethod.getEvents >= 10, "expected multiple windowed RPC calls");
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
@@ -198,9 +221,12 @@ test("poller (mock rpc): a restarted poller resumes from its saved cursor instea
   const poller1 = createPoller({ config, server: serverFor(mock.url), send: fakeSender(sent1) });
   await poller1.start();
   await waitFor(() => sent1.length >= 1);
-  poller1.stop();
+  await poller1.stop();
 
-  const saved = JSON.parse(await readFile(cursorFile, "utf8"));
+  // The cursor save is its own step at the end of the cycle, after the send
+  // has already resolved — wait for the file itself rather than assuming it
+  // exists the instant sent1.length flips to 1.
+  const saved = await waitForCursorFile(cursorFile, (j) => Boolean(j?.targets?.market?.cursor));
   assert.equal(saved.version, 1);
   assert.ok(saved.targets.market.cursor);
 
@@ -220,7 +246,7 @@ test("poller (mock rpc): a restarted poller resumes from its saved cursor instea
     assert.equal(sent2.length, 1); // only the NEW event — no re-delivery of claim_created
     assert.match(sent2[0], /challenged/);
   } finally {
-    poller2.stop();
+    await poller2.stop();
     await mock.close();
   }
 });
@@ -251,7 +277,7 @@ test("poller (mock rpc): a corrupt cursor file is treated as a cold start, not a
     await waitFor(() => sent.length >= 1);
     assert.match(sent[0], /\\#20\b/);
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
@@ -287,7 +313,7 @@ test("poller (mock rpc): Telegram send retries then succeeds; the cursor still a
     assert.equal(poller.status().notificationsSent, 1);
     assert.equal(poller.status().notificationsFailed, 0);
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
@@ -312,7 +338,7 @@ test("poller (mock rpc): pause prevents new cycles from starting; resume lets th
     assert.equal(poller.resume(), "resumed");
     await waitFor(() => poller.status().cycles > pausedAt);
   } finally {
-    poller.stop();
+    await poller.stop();
     await mock.close();
   }
 });
