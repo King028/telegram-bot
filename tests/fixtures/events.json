@@ -119,6 +119,24 @@
       }
     },
     {
+      "id": "negative_stake_amount_unknown",
+      "kind": "negative",
+      "expect": "skip",
+      "event": {
+        "source": "market",
+        "contractId": "CFIXTUREMARKET00000000000000000000000000000000000000000",
+        "ledger": 51,
+        "txHash": "",
+        "at": 0,
+        "eventId": "51-0",
+        "payload": {
+          "name": "unknown",
+          "eventName": "claim_challenged",
+          "reason": "claim_challenged.stake: expected non-negative amount, got -20000000"
+        }
+      }
+    },
+    {
       "id": "category_markdown_reserved",
       "kind": "boundary",
       "expect": "notify",

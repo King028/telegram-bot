@@ -23,7 +23,14 @@
  * from any real bot's `data/cursor.json`.
  */
 
-import { ConfigError, activeProfileName, loadConfig, networkLabel } from "./config.js";
+import {
+  ConfigError,
+  activeProfileName,
+  configProvenance,
+  formatProvenanceSummary,
+  loadConfig,
+  networkLabel,
+} from "./config.js";
 import { startHealthServer } from "./health.js";
 import { safeErrorMessage } from "./notifications/format.js";
 import { createPoller } from "./poller.js";
@@ -72,6 +79,7 @@ async function main(): Promise<void> {
   console.log(
     `[dry-run] poll      every ${config.pollIntervalMs}ms · cap ${config.maxNotificationsPerCycle} notification(s)/cycle`,
   );
+  console.log(`[dry-run] config    ${formatProvenanceSummary(configProvenance())}`);
 
   const server = createRpcServer(config);
 
@@ -89,8 +97,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     console.log(`[dry-run] ${signal} received, stopping`);
-    poller.stop();
-    void Promise.allSettled([health.close(), mock.close()]).finally(() => process.exit(0));
+    void Promise.allSettled([poller.stop(), health.close(), mock.close()]).finally(() => process.exit(0));
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));

@@ -21,6 +21,8 @@ function baseConfig(overrides = {}) {
     healthHost: "127.0.0.1",
     healthPort: 0,
     healthStaleMs: 90_000,
+    startupHealthDeadlineMs: 30_000,
+    startupHealthRetryMs: 1_000,
     ...overrides,
   };
 }
@@ -35,6 +37,7 @@ function baseStatus(overrides = {}) {
     lastSuccessAt: 5_000,
     latestLedger: 42,
     oldestLedger: 1,
+    chainClockAt: 5_000,
     notificationsSent: 2,
     notificationsFailed: 0,
     eventsSkipped: 1,
@@ -116,6 +119,58 @@ test("buildHealthReport never embeds bot token or chat id", () => {
   assert.equal(blob.includes("SECRET-TOKEN"), false);
 });
 
+test("buildHealthReport reports config provenance without any values", () => {
+  const config = baseConfig();
+  const report = buildHealthReport(config, baseStatus(), 5_500);
+
+  // Names and origins only: enough to confirm which token and chat id are in
+  // use, never enough to disclose either.
+  assert.ok(report.config.entries.length > 0);
+  const sources = new Set([
+    "process-env",
+    "env-file",
+    "profile-default",
+    "built-in-default",
+    "derived",
+    "unset",
+  ]);
+  for (const entry of report.config.entries) {
+    assert.equal(typeof entry.key, "string");
+    assert.ok(sources.has(entry.source), `${entry.key} has an unknown source`);
+    assert.equal(typeof entry.secret, "boolean");
+  }
+  const token = report.config.entries.find((e) => e.key === "BOT_TOKEN");
+  assert.ok(token, "the bot token's origin must be reported");
+  assert.equal(token.secret, true);
+
+  const blob = JSON.stringify(report.config);
+  assert.equal(blob.includes(config.botToken), false);
+  assert.equal(blob.includes(config.chatId), false);
+});
+
+test("buildHealthReport accepts injected provenance for a deterministic report", () => {
+  const provenance = {
+    profile: null,
+    envFile: { present: false, suppliedKeys: 0 },
+    entries: [{ key: "BOT_TOKEN", source: "process-env", secret: true }],
+    counts: { "process-env": 1 },
+    warnings: ["BOT_TOKEN is set but empty; nothing supplies the value"],
+  };
+  const report = buildHealthReport(baseConfig(), baseStatus(), 5_500, provenance);
+
+  assert.deepEqual(report.config, provenance);
+});
+
+test("healthMessage names the configuration provenance without values", () => {
+  const config = baseConfig();
+  const text = healthMessage(config, baseStatus(), 5_500);
+
+  assert.match(text, /Config: `profile=/);
+  assert.equal(text.includes(config.botToken), false);
+  assert.equal(text.includes("SECRET-TOKEN"), false);
+  assert.equal(text.includes(config.chatId), false);
+});
+
 test("startHealthServer with HEALTH_PORT=0 does not bind", async () => {
   const server = startHealthServer({
     config: baseConfig({ healthPort: 0 }),
@@ -155,6 +210,9 @@ test("GET /health returns 200 and redacted JSON for a healthy poller", async () 
     const body = await res.json();
     assert.equal(body.ok, true);
     assert.equal(body.status, "ok");
+    // Chain clock: baseStatus saw chain time at 5_000, the probe runs at 5_500.
+    assert.equal(body.poller.chainClockAt, new Date(5_000).toISOString());
+    assert.equal(body.poller.chainClockSkewMs, 500);
     const text = JSON.stringify(body);
     assert.equal(text.includes(secret), false);
     assert.equal(text.includes(chat), false);
@@ -184,6 +242,49 @@ test("GET /health boundary: first boot before any success stays ok", () => {
   );
   assert.equal(report.ok, true);
   assert.equal(report.status, "ok");
+});
+
+test("buildHealthReport surfaces a draining shutdown without calling it degraded", () => {
+  // Stale success + repeated failures would be degraded for a running poller;
+  // a deliberate drain is doing what it was told to do.
+  const report = buildHealthReport(
+    baseConfig({ healthStaleMs: 1 }),
+    baseStatus({
+      stopping: true,
+      pendingFlush: true,
+      notificationsDropped: 3,
+      lastFlushAt: 6_000,
+      lastSuccessAt: 1_000,
+      consecutiveFailures: 10,
+    }),
+    5_500,
+  );
+
+  assert.equal(report.ok, true);
+  assert.equal(report.status, "ok");
+  assert.equal(report.poller.stopping, true);
+  assert.equal(report.poller.pendingFlush, true);
+  assert.equal(report.poller.notificationsDropped, 3);
+  assert.equal(report.poller.lastFlushAt, new Date(6_000).toISOString());
+});
+
+test("buildHealthReport reports stopped once a shutdown has finished", () => {
+  const report = buildHealthReport(
+    baseConfig(),
+    baseStatus({ running: false, stopping: true }),
+    5_500,
+  );
+  assert.equal(report.ok, false);
+  assert.equal(report.status, "stopped");
+  assert.equal(report.poller.stopping, true);
+});
+
+test("buildHealthReport fills in the shutdown fields when a status omits them", () => {
+  const report = buildHealthReport(baseConfig(), baseStatus(), 5_500);
+  assert.equal(report.poller.stopping, false);
+  assert.equal(report.poller.pendingFlush, false);
+  assert.equal(report.poller.notificationsDropped, 0);
+  assert.equal(report.poller.lastFlushAt, null);
 });
 
 test("createBot /health command replies with exact MarkdownV2 payload for healthy poller", async () => {

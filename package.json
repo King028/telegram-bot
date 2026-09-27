@@ -14,12 +14,17 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lockfile:check": "node scripts/check-lockfile.mjs",
+    "lockfile:reproduce": "node scripts/check-lockfile.mjs --reproduce",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:mock": "npm run build && node --test tests/mock-*.test.mjs",
     "scan": "tsx src/stellar/events.ts",
     "scan:mock": "tsx src/stellar/events.ts --mock",
     "mock:rpc": "tsx src/stellar/mock-rpc.ts",
-    "mock:poll": "tsx src/mock-run.ts"
+    "mock:poll": "tsx src/mock-run.ts",
+    "audit": "tsx src/audit-cli.ts",
+    "audit:report": "tsx src/audit-cli.ts",
+    "seed:cursor": "tsx src/dev/seedCursor.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.2.0",

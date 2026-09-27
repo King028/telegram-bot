@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { auditEntry, createAuditLog } from "../dist/audit.js";
 import {
   registerCommandHandlers,
   resumeMessage,
@@ -154,6 +158,82 @@ test("operator controls are disabled when no operator id is configured", async (
   });
 
   assert.equal(calls, 0);
+  assert.deepEqual(replies, []);
+});
+
+test("operator /audit renders the report from the live in-memory window", async () => {
+  const auditFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "mimir-audit-gate-")),
+    "audit.jsonl",
+  );
+  const audit = createAuditLog();
+  audit.record(auditEntry("boot", { detail: "test boot entry" }));
+
+  const { handlers } = mockedBot({
+    config: baseConfig(),
+    status: () => baseStatus(),
+    pause: () => "paused",
+    resume: () => "resumed",
+    audit,
+    auditFile,
+  });
+  const { ctx, replies } = commandContext(42, 81);
+
+  await handlers.get("audit")(ctx);
+
+  assert.equal(replies.length, 1);
+  const [text, options] = replies[0];
+  assert.match(text, /^\*Audit\* — /);
+  assert.match(text, /boot/);
+  assert.equal(options.parse_mode, undefined);
+
+  fs.rmSync(path.dirname(auditFile), { recursive: true, force: true });
+});
+
+test("non-operator /audit is silently ignored without reading the file or replying", async () => {
+  const auditFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "mimir-audit-gate-")),
+    "audit.jsonl",
+  );
+  let auditReadCalls = 0;
+  const audit = {
+    record: () => undefined,
+    tail: () => {
+      auditReadCalls += 1;
+      return [];
+    },
+    flush: () => [],
+  };
+
+  const { handlers } = mockedBot({
+    config: baseConfig(),
+    status: () => baseStatus(),
+    pause: () => "paused",
+    resume: () => "resumed",
+    audit,
+    auditFile,
+  });
+  const { ctx, replies } = commandContext(43, 82);
+
+  await withoutWarnings(() => handlers.get("audit")(ctx));
+
+  assert.deepEqual(replies, []);
+  assert.equal(auditReadCalls, 0);
+
+  fs.rmSync(path.dirname(auditFile), { recursive: true, force: true });
+});
+
+test("operator controls disabled means /audit is ignored even for the right user id", async () => {
+  const { handlers } = mockedBot({
+    config: baseConfig({ operatorTelegramUserId: null }),
+    status: () => baseStatus(),
+    pause: () => "paused",
+    resume: () => "resumed",
+  });
+  const { ctx, replies } = commandContext(42, 83);
+
+  await withoutWarnings(() => handlers.get("audit")(ctx));
+
   assert.deepEqual(replies, []);
 });
 

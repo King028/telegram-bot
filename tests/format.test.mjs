@@ -231,6 +231,33 @@ test("createNotifier preserves Telegram send failures for the poller", async () 
   await assert.rejects(notify("message"), error);
 });
 
+test("createNotifier routes named contract sources and preserves the legacy fallback", async () => {
+  const sent = [];
+  const fakeBot = {
+    api: {
+      sendMessage: async (...args) => {
+        sent.push(args);
+        return {};
+      },
+    },
+  };
+  const notify = createNotifier(fakeBot, {
+    chatId: "-1001234567890",
+    marketChatId: "-1001111111111",
+    squadChatId: "@mimir_squad",
+  });
+
+  await notify("market event", "market");
+  await notify("squad event", "squad");
+  await notify("legacy event");
+
+  assert.deepEqual(sent.map(([chatId, text]) => [chatId, text]), [
+    ["-1001111111111", "market event"],
+    ["@mimir_squad", "squad event"],
+    ["-1001234567890", "legacy event"],
+  ]);
+});
+
 test("escapeMd handles a long adversarial string without dropping characters", () => {
   const input = reserved.repeat(10_000);
   const escaped = escapeMd(input);

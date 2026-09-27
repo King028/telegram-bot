@@ -375,7 +375,7 @@ test("limit=5 paginates a dense ledger down to every event", async () => {
 
 // ── Poller: cursor safety under failure ─────────────────────────────────────
 
-test("a stale cursor fails the scan while the cursor is preserved", async () => {
+test("a stale cursor below the retained floor is rewound and the scan recovers", async () => {
   const { file, cleanup } = await tmpCursorFile(cursorFileJson(STALE_CURSOR));
   const mock = await startScenario(scenario([marketEvent(995, 7), squadEvent(996, 3)]));
   const cap = captureConsole();
@@ -386,28 +386,24 @@ test("a stale cursor fails the scan while the cursor is preserved", async () => 
       sends.push(text);
     });
 
-    await waitFor(() => poller.status().consecutiveFailures >= 1, "stale cursor failure");
-    const status = poller.status();
-    assert.equal(status.running, true);
-    assert.equal(status.notificationsSent, 0);
-    // The last failing target wins the shared slot; either prefix proves it.
-    assert.match(status.lastError.message, /^(market|squad): /);
-    assert.match(status.lastError.message, /stale/);
-    assert.ok(status.lastError.message.length <= 240);
-
-    const market = targetState(poller, "market");
-    assert.equal(market.cursor, STALE_CURSOR, "failure must not move or wipe the cursor");
-    assert.match(market.lastError, /stale/);
-    assert.equal(targetState(poller, "squad").cursor, STALE_CURSOR);
-    assert.equal(sends.length, 0);
-
-    const onDisk = await waitForCursorFile(
-      file,
-      (j) => j.targets?.market?.cursor === STALE_CURSOR,
-      "stale cursor written back unchanged",
+    // Ledger 100 precedes the mock's retained floor of 900, so the rejection is
+    // confirmed against getHealth() and the target is rewound to the floor.
+    await waitFor(() => poller.status().cursorRewinds >= 1, "floor rewind");
+    // The floor walk then hands back an in-window cursor and drops the hint.
+    await waitFor(
+      () => targetState(poller, "market").cursor === TIP_CURSOR,
+      "floor walk cursor",
     );
-    assert.equal(onDisk.version, 1);
+    await waitFor(() => sends.length >= 1, "event delivered after the rewind");
 
+    const status = poller.status();
+    const market = targetState(poller, "market");
+    assert.ok(status.cursorRewinds >= 1, "the floor rewind is counted");
+    assert.equal(market.rewindFromLedger, null, "the transient hint is cleared");
+    assert.ok(
+      cap.text().includes("rewinding to the floor 900"),
+      "the recovery logs the retained floor it resumed from",
+    );
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
