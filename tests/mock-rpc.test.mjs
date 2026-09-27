@@ -44,6 +44,7 @@ const PRE_EVENT_CURSOR = `${(949n << 32n) | 0xffffffffn}-4294967295`;
 const STALE_CURSOR = `${100n << 32n}-0`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const SECRET_RE = /\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/;
 
 // ── Harness ─────────────────────────────────────────────────────────────────
@@ -202,17 +203,16 @@ test("scanner walks through empty pages and decodes both contracts", async () =>
   const server = createRpcServer(stellarConfig(mock));
   try {
     const before = mock.stats();
+
     const market = await readContractEvents(
       server,
       { source: "market", contractId: MOCK_MARKET_CONTRACT_ID },
       { startLedger: 900 },
     );
-
     // Window 900-949 comes back empty; a short-page stop would find nothing.
     assert.equal(market.pages, 3, "must continue past the empty first window");
     assert.equal(market.events.length, 1);
     assert.equal(market.truncated, false);
-
     const m = market.events[0];
     assert.equal(m.payload.name, "claim_challenged");
     assert.equal(m.payload.claimId, 7);
@@ -264,25 +264,21 @@ test("request validation mirrors the real RPC", async () => {
       () => server.getEvents({ filters: [], startLedger: 10, limit: 5 }),
       "before the retained floor 900",
     );
-
     // A cursor from before the retained window is stale.
     await rejects(
       () => server.getEvents({ filters: [], cursor: STALE_CURSOR, limit: 5 }),
       "cursor is stale: ledger 100 precedes the retained floor 900",
     );
-
     // A cursor past the tip is rejected.
     await rejects(
       () => server.getEvents({ filters: [], cursor: `${(2000n << 32n).toString()}-0`, limit: 5 }),
       "ahead of the chain tip",
     );
-
     // Garbage is rejected as an invalid resume token.
     await rejects(
       () => server.getEvents({ filters: [], cursor: "garbage", limit: 5 }),
       "not a valid resume token",
     );
-
     // Both pagination modes in one request is rejected.
     await rejects(
       () =>
@@ -338,7 +334,6 @@ test("a large scenario stays within page, request, time, and log bounds", async 
     assert.equal(methodCount(after, "getEvents") - methodCount(before, "getEvents"), 20);
     assert.equal(methodCount(after, "getHealth") - methodCount(before, "getHealth"), 1);
     assert.ok(after.requests - before.requests <= 21);
-
     assertBoundedLogs(cap.lines);
   } finally {
     cap.restore();
@@ -425,8 +420,8 @@ test("injected JSON-RPC failures stay bounded, redacted, and recover", async () 
     poller = await runPoller(botConfig(file, mock), (text) => {
       sends.push(text);
     });
-
     await waitFor(() => poller.status().consecutiveFailures >= 1, "injected failure");
+
     let status = poller.status();
     assert.equal(status.running, true, "the loop must survive an RPC failure");
     assert.equal(status.notificationsSent, 0, "no events may be delivered by a failed scan");
@@ -462,13 +457,11 @@ test("injected JSON-RPC failures stay bounded, redacted, and recover", async () 
       "recovery cycle",
     );
     await waitFor(() => poller.status().notificationsSent === 2, "both events delivered once");
-
     status = poller.status();
     assert.equal(status.notificationsSent, 2, "both contracts' events exactly once");
     assert.equal(status.notificationsFailed, 0);
     assert.notEqual(targetState(poller, "market").cursor, PRE_EVENT_CURSOR);
     assert.equal(sends.length, 2);
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -497,7 +490,6 @@ test("HTTP-shaped 429/500 failures are survivable and actionable", async () => {
     ]) {
       const failuresBefore = poller.status().consecutiveFailures;
       mock.setFailure("getEvents", { kind });
-
       // Keyed on cycle completion, not the first error line: clearing an
       // injection mid-cycle would let the second target recover alone.
       await waitFor(
@@ -510,7 +502,6 @@ test("HTTP-shaped 429/500 failures are survivable and actionable", async () => {
         },
         `${kind} surfaced in lastError`,
       );
-
       const status = poller.status();
       assert.equal(status.running, true, `poller must keep running through ${kind}`);
       assert.match(status.lastError.message, new RegExp(`status code ${needle}`));
@@ -530,7 +521,6 @@ test("HTTP-shaped 429/500 failures are survivable and actionable", async () => {
     await waitFor(() => poller.status().notificationsSent === 1, "event delivered after recovery");
     assert.equal(poller.status().notificationsSent, 1, "delivered once after recovery");
     assert.equal(sends.length, 1);
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -555,7 +545,6 @@ test("a malformed event is skipped with a bounded reason while the cursor advanc
     poller = await runPoller(botConfig(file, mock), (text) => {
       sends.push(text);
     });
-
     await waitFor(
       () => {
         const s = poller.status();
@@ -575,7 +564,6 @@ test("a malformed event is skipped with a bounded reason while the cursor advanc
       skipLine.text,
       /\[poller\] skipped market event "claim_challenged" at ledger 996 \(.*expected a Stellar address strkey.*\)/,
     );
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -598,7 +586,6 @@ test("the per-cycle burst cap drops extras without losing cursor position", asyn
     poller = await runPoller(botConfig(file, mock), (text) => {
       sends.push(text);
     });
-
     await waitFor(
       () => {
         const s = poller.status();
@@ -616,7 +603,6 @@ test("the per-cycle burst cap drops extras without losing cursor position", asyn
       ),
       `no cap warning in: ${cap.text()}`,
     );
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -638,7 +624,6 @@ test("Telegram send failures: bounded retries, drop, cursor advances, token reda
       attempts.push(text);
       return Promise.reject(new Error(`Too Many Requests (429): ${TOKEN}`));
     });
-
     await waitFor(() => poller.status().notificationsFailed >= 1, "send failure counted", 12000);
     await waitForCursorFile(
       file,
@@ -657,7 +642,6 @@ test("Telegram send failures: bounded retries, drop, cursor advances, token reda
     assert.match(text, /send attempt 2 failed, retrying in 2000ms: /);
     assert.match(text, /send failed for claim_challenged at ledger 995 after retries: /);
     assert.ok(text.includes("[REDACTED]"), "token must be redacted in the failure line");
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -680,7 +664,6 @@ test("restart resumes from the version-1 cursor file with no replay and no drop"
     poller1 = await runPoller(botConfig(file, mock), (text) => {
       first.push(text);
     });
-
     const saved = await waitForCursorFile(
       file,
       (j) => typeof j.targets?.market?.cursor === "string" && j.targets.market.cursor !== null,
@@ -696,7 +679,6 @@ test("restart resumes from the version-1 cursor file with no replay and no drop"
     poller2 = await runPoller(botConfig(file, mock), (text) => {
       second.push(text);
     });
-
     await waitFor(
       () => poller2.status().cycles >= 1 && poller2.status().lastSuccessAt !== null,
       "second run completed a cycle",
@@ -711,7 +693,6 @@ test("restart resumes from the version-1 cursor file with no replay and no drop"
       topics: [11, { address: ALICE }],
       fields: { category: "crypto" },
     });
-
     await waitFor(() => second.length === 1, "appended event delivered after restart");
     assert.equal(poller2.status().notificationsSent, 1);
     assert.equal(poller2.status().notificationsFailed, 0);
@@ -727,7 +708,6 @@ test("restart resumes from the version-1 cursor file with no replay and no drop"
     assert.notEqual(final.targets.market.cursor, cursor1, "cursor advanced for the new event");
     assert.ok(typeof final.targets.squad.cursor === "string");
     assert.equal(first.length, 1, "first run sent exactly one message overall");
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller1?.stop();
@@ -749,7 +729,6 @@ test("a corrupt cursor file cold-starts instead of crashing", async () => {
     poller = await runPoller(botConfig(file, mock), (text) => {
       sends.push(text);
     });
-
     await waitFor(() => poller.status().lastSuccessAt !== null, "cold start cycle");
     await waitFor(() => sends.length === 1, "event delivered after corrupt-file cold start");
 
@@ -760,7 +739,6 @@ test("a corrupt cursor file cold-starts instead of crashing", async () => {
       cap.lines.some((l) => l.text.includes("cursor file unreadable, starting cold")),
       `no corrupt-file warning in: ${cap.text()}`,
     );
-
     assertBoundedLogs(cap.lines);
   } finally {
     poller?.stop();
@@ -859,8 +837,8 @@ test("scanner CLI --mock runs with zero credentials against the local mock", asy
     );
 
     assert.match(stdout, /RPC\s+http:\/\/127\.0\.0\.1:\d+ \(mock\)/);
-    assert.ok(stdout.includes(`=== market ${MOCK_MARKET_CONTRACT_ID} ===`));
-    assert.ok(stdout.includes(`=== squad ${MOCK_SQUAD_CONTRACT_ID} ===`));
+    assert.ok(stdout.includes(`=== market  ${MOCK_MARKET_CONTRACT_ID} ===`));
+    assert.ok(stdout.includes(`=== squad  ${MOCK_SQUAD_CONTRACT_ID} ===`));
     assert.match(stdout, /truncated=false/);
     assert.ok(stdout.includes("claim_challenged"));
     assert.ok(stdout.includes("deposited"));
@@ -881,7 +859,6 @@ test("mock:poll boots a credential-free dry run and shuts down cleanly", async (
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-
   let out = "";
   child.stdout.on("data", (chunk) => {
     out += chunk;
@@ -912,7 +889,6 @@ test("mock:poll boots a credential-free dry run and shuts down cleanly", async (
     const [code] = await once(child, "exit");
     assert.equal(code, 0, `expected clean exit, output:\n${out}`);
     assert.ok(out.includes("[dry-run] SIGTERM received"), `no graceful stop in:\n${out}`);
-
     assertBoundedLogs(
       out.split("\n").filter(Boolean).map((text) => ({ text })),
     );

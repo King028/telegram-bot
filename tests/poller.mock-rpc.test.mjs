@@ -232,7 +232,7 @@ test("poller (mock rpc): a restarted poller resumes from its saved cursor instea
 
   mock.addEvent({
     source: "market",
-    ledger: 15,
+    ledger: 25,
     eventName: "claim_challenged",
     topics: [11, { address: CHALLENGER }],
     fields: { stake: 20_000_000n },
